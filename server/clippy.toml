@@ -1,0 +1,4 @@
+disallowed-methods = [
+    { path = "std::time::SystemTime::now", reason = "apply() must be deterministic; commands may read the clock but must go through crate::time::now_ms, which carries the #[allow]" },
+    { path = "rand::random", reason = "apply() must be deterministic" },
+]

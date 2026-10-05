@@ -1,0 +1,343 @@
+// The wire contract between server-api and every client (web/WASM, Android,
+// iOS). Kept deliberately separate from the server crate's own Rust types:
+// this is the one file every language's codegen reads, so it can't lean on
+// anything Rust-specific. Mirrors server::api::Request one-for-one; see
+// that module's doc comment for why it's "one enum, one exhaustive match"
+// rather than reflection over every pub fn.
+
+
+enum AlbumKind: ubyte { User, System }
+enum AlbumRole: ubyte { Reader, Writer, Admin, Owner }
+// Small/Medium are generated server-side on first request and cached from
+// then on (server::thumbnail): always JPEG, for images and videos alike (a
+// video's is one extracted frame). When none can be made, a small original
+// (up to 2 MiB) is sent instead; a larger one gets ErrorCode NoThumbnail.
+// Original is the whole file, up to 15 MiB; larger files get TooLarge and are
+// fetched with DownloadChunkRequest. Small is sized for a phone-width grid
+// tile or a progressive-loading placeholder; Medium for a desktop grid tile
+// or album preview.
+enum ThumbnailVariant: ubyte { Original, Small, Medium }
+
+// ---------------------------------------------------------------- requests
+
+table CreateUserRequest { username: string (required); password: string (required); }
+table LoginRequest { username: string (required); password: string (required); otp_code: string; device_label: string (required); }
+// Admin-only: activates a Pending account (server::commands::user::approve_user).
+table ApproveUserRequest { user_id: string (required); }
+
+// hash and size are NOT sent by the client: the server computes both from
+// `data` itself, so `file_hash` can never disagree with what's actually on
+// disk (see server::commands::file::upload_file's doc comment).
+table UploadFileRequest {
+  data: [ubyte] (required);
+  mime: string (required);
+  width: int32 = null;
+  height: int32 = null;
+  // Milliseconds, for videos and audio.
+  duration: int32 = null;
+  previous_version: string;
+  // Defaults to the browser File's original filename; a name is global to
+  // the file (see server::Action::UploadFile's doc comment), not scoped
+  // to whichever album it ends up in.
+  name: string;
+  // When it was taken, ms since epoch (Android: MediaStore DATE_TAKEN).
+  // Listings sort by it, falling back to when it was added.
+  taken_at: int64 = null;
+}
+table DownloadFileRequest { file_id: string (required); variant: ThumbnailVariant = Original; }
+// A byte range of the original, for files too large for DownloadFileRequest:
+// up to `length` bytes (the server caps it at 8 MiB) from `offset`.
+table DownloadChunkRequest { file_id: string (required); offset: uint64; length: uint32; }
+table RenameFileRequest { file_id: string (required); name: string (required); }
+table ChangePasswordRequest { old_password: string (required); new_password: string (required); }
+table ListPendingUsersRequest {}
+table CreateAlbumRequest { name: string (required); kind: AlbumKind = User; }
+table RenameAlbumRequest { album_id: string (required); name: string (required); }
+// Per-membership, not album-wide (see server::Action::HideAlbum's doc
+// comment) — hides/restores the album from the caller's own list only.
+table HideAlbumRequest { album_id: string (required); }
+table UnhideAlbumRequest { album_id: string (required); }
+table ListHiddenAlbumsRequest {}
+table AddToAlbumRequest { album_id: string (required); file_id: string (required); }
+table TrashFromAlbumRequest { album_id: string (required); file_id: string (required); }
+table RestoreFromTrashRequest { album_id: string (required); file_id: string (required); }
+table PurgeFromAlbumRequest { album_id: string (required); file_id: string (required); }
+// Admins and owners share; only an owner grants Owner or changes an owner's
+// role, and the last owner can't be demoted (InvalidRequest). Sharing with
+// someone already in the album changes their role.
+table ShareAlbumRequest { album_id: string (required); user_id: string (required); role: AlbumRole = Reader; }
+// Same, naming the user by username. UserNotFound if there's no such user.
+table ShareAlbumWithRequest { album_id: string (required); username: string (required); role: AlbumRole = Reader; }
+// Admins and owners remove others (only an owner removes an owner); any
+// member may remove themselves, i.e. leave. Not the last owner.
+table UnshareAlbumRequest { album_id: string (required); user_id: string (required); }
+// Who the album is shared with, owners first; any member may ask.
+table ListAlbumMembersRequest { album_id: string (required); }
+table RoleOfRequest { album_id: string (required); user_id: string (required); }
+
+table ListMyAlbumsRequest {}
+table ListAlbumFilesRequest { album_id: string (required); }
+table ListLibraryRequest {}
+// The library one page at a time, newest first by when each file was taken
+// (falling back to when it was added), with what a gallery needs per file.
+// `after` is the previous page's `next`; absent for the first page.
+table ListLibraryPageRequest { after: string; limit: uint32 = 200; }
+// An album's active files, paged and shaped like the library (answered with
+// LibraryPageResponse; added_at is when each file joined the album).
+table ListAlbumPageRequest { album_id: string (required); after: string; limit: uint32 = 200; }
+// Owner-only. The album and its file links go; the files stay in libraries.
+table DeleteAlbumRequest { album_id: string (required); }
+// Takes a file out of the caller's own library ("All Photos"). The content
+// stays while any library or album references it. Answered with Ack.
+table RemoveFromLibraryRequest { file_id: string (required); }
+table ListTrashRequest { album_id: string (required); }
+// Which of `hashes` are already in the caller's own library — lets a backup
+// client skip re-uploading what it already sent, and rebuild its local
+// "what's backed up" state from the server alone. Each hash is tagged,
+// "sha2-256:<lowercase hex>" (core.md). Scoped to the caller's library on
+// purpose: bytes that only exist in someone else's library are reported
+// exactly like bytes the server has never seen (absent), so this can't
+// probe what other users hold.
+table FindLibraryFilesByHashRequest { hashes: [string] (required); }
+
+// Chunked upload, for files too large for one UploadFileRequest (a whole
+// request must fit in one 16 MiB frame): BeginUpload, then UploadChunk
+// until `size` bytes are sent, then CommitUpload. An upload is identified by
+// the caller and the file's tagged hash, which makes it resumable: after a
+// dropped connection, BeginUpload again answers with how many bytes the
+// server already has. The server hashes what it actually received and
+// refuses the commit (HashMismatch) if that isn't `hash`.
+table BeginUploadRequest { hash: string (required); size: uint64; }
+// Chunks must arrive in order: `offset` must be exactly what the server has
+// (WrongOffset otherwise; BeginUpload again to learn where to resume).
+// BeginUpload, UploadChunk and CommitUpload run in the order they arrive on
+// a connection (unlike other requests, which run concurrently), so a client
+// may send the next chunk before the previous one is answered. If one fails,
+// the ones already sent behind it fail with WrongOffset.
+table UploadChunkRequest { hash: string (required); offset: uint64; data: [ubyte] (required); }
+// Same metadata as UploadFileRequest; answered with an UploadFileResponse.
+table CommitUploadRequest {
+  hash: string (required);
+  mime: string (required);
+  width: int32 = null;
+  height: int32 = null;
+  // Milliseconds, for videos and audio.
+  duration: int32 = null;
+  previous_version: string;
+  name: string;
+  // As in UploadFileRequest.
+  taken_at: int64 = null;
+}
+
+table BeginOtpEnrollmentRequest {}
+table ConfirmOtpEnrollmentRequest { secret_base32: string (required); code: string (required); }
+table DisableOtpRequest {}
+
+table RevokeSessionRequest { session_token: string (required); }
+table ListSessionsRequest {}
+
+union RequestBody {
+  CreateUserRequest,
+  LoginRequest,
+  ApproveUserRequest,
+  ChangePasswordRequest,
+  ListPendingUsersRequest,
+  UploadFileRequest,
+  DownloadFileRequest,
+  RenameFileRequest,
+  CreateAlbumRequest,
+  RenameAlbumRequest,
+  HideAlbumRequest,
+  UnhideAlbumRequest,
+  ListHiddenAlbumsRequest,
+  AddToAlbumRequest,
+  TrashFromAlbumRequest,
+  RestoreFromTrashRequest,
+  PurgeFromAlbumRequest,
+  ShareAlbumRequest,
+  UnshareAlbumRequest,
+  RoleOfRequest,
+  ListMyAlbumsRequest,
+  ListAlbumFilesRequest,
+  ListLibraryRequest,
+  ListTrashRequest,
+  BeginOtpEnrollmentRequest,
+  ConfirmOtpEnrollmentRequest,
+  DisableOtpRequest,
+  RevokeSessionRequest,
+  ListSessionsRequest,
+  FindLibraryFilesByHashRequest,
+  BeginUploadRequest,
+  UploadChunkRequest,
+  CommitUploadRequest,
+  ListLibraryPageRequest,
+  DownloadChunkRequest,
+  ListAlbumPageRequest,
+  DeleteAlbumRequest,
+  RemoveFromLibraryRequest,
+  ShareAlbumWithRequest,
+  ListAlbumMembersRequest,
+}
+
+table Request {
+  // Correlates a Response back to the Request that produced it — requests
+  // on one connection may be pipelined, so responses aren't guaranteed to
+  // come back in submission order.
+  request_id: uint64;
+  // Absent for the two ops that don't need one yet: CreateUser, Login.
+  token: string;
+  body: RequestBody (required);
+}
+
+// --------------------------------------------------------------- responses
+
+table Ack {}
+
+table CreateUserResponse { user_id: string (required); }
+// is_admin lets the client decide whether to show admin-only UI (the
+// pending-users list, approve) without a separate round-trip.
+table LoginResponse { token: string (required); is_admin: bool; }
+table UploadFileResponse { file_id: string (required); }
+table DownloadFileResponse { data: [ubyte] (required); mime: string (required); name: string; }
+table CreateAlbumResponse { album_id: string (required); }
+table RoleOfResponse {
+  // Absent (not merely a default) means "not a member of this album".
+  role: AlbumRole = null;
+}
+
+table AlbumSummary {
+  album_id: string (required);
+  name: string (required);
+  kind: AlbumKind;
+  role: AlbumRole;
+  // Active (non-trashed) files, and the newest of them by capture time to
+  // show as a cover (absent for an empty album).
+  file_count: uint32;
+  cover_file_id: string;
+}
+table ListMyAlbumsResponse { albums: [AlbumSummary] (required); }
+
+table AlbumMember { user_id: string (required); username: string (required); role: AlbumRole; }
+table AlbumMembersResponse { members: [AlbumMember] (required); }
+
+table FileSummary {
+  file_id: string (required);
+  // Absent for a file that's never been named — no filename came with
+  // the upload, and nobody's renamed it since.
+  name: string;
+}
+table ListFilesResponse { files: [FileSummary] (required); }
+
+table TrashedFile {
+  file_id: string (required);
+  trashed_at: int64;
+  trashed_by: string (required);
+}
+// Only the hashes that matched; any hash from the request not listed here
+// isn't in the caller's library.
+table HashMatch { hash: string (required); file_id: string (required); }
+table FindLibraryFilesByHashResponse { matches: [HashMatch] (required); }
+// How many bytes of this upload the server already has: where to continue.
+table BeginUploadResponse { offset: uint64; }
+
+table LibraryFile {
+  file_id: string (required);
+  // Tagged, "sha2-256:<hex>": lets a device match these to its own files.
+  hash: string (required);
+  name: string;
+  mime: string (required);
+  size: int64;
+  width: int32 = null;
+  height: int32 = null;
+  // Milliseconds.
+  duration: int32 = null;
+  // When it was taken / added to the library, ms since epoch. Pages are
+  // sorted by taken_at, or added_at where taken_at is absent.
+  taken_at: int64 = null;
+  added_at: int64;
+}
+// `next` is absent on the last page.
+table LibraryPageResponse { files: [LibraryFile] (required); next: string; }
+table DownloadChunkResponse { data: [ubyte] (required); total_size: uint64; mime: string (required); name: string; }
+
+table ListTrashResponse { files: [TrashedFile] (required); }
+
+table OtpEnrollmentResponse { secret_base32: string (required); otpauth_url: string (required); }
+
+table SessionSummary { device_label: string (required); issued_at: int64; }
+table ListSessionsResponse { sessions: [SessionSummary] (required); }
+
+table PendingUser { user_id: string (required); username: string (required); created_at: int64; }
+table ListPendingUsersResponse { users: [PendingUser] (required); }
+
+// Mirrors server::ServerError's variants that can actually reach a client
+// (internal-only variants — Diesel/Pool/EventLog/PasswordHash — all
+// collapse to Internal, matching api::http_status's 500 bucket: a client
+// has no useful decision to make on those beyond "something broke").
+enum ErrorCode: ubyte {
+  InvalidCredentials,
+  InvalidToken,
+  PermissionDenied,
+  AlbumNotFound,
+  UsernameTaken,
+  AlbumNameTaken,
+  RateLimited,
+  OtpRequired,
+  InvalidOtp,
+  NotTrashed,
+  // A field that doesn't parse as its domain type (a malformed ULID, an
+  // untagged hash, ...). Didn't exist in an earlier JSON version of this
+  // API, where serde handled it automatically — FlatBuffers strings are
+  // just strings, so server-api has to parse and validate them itself.
+  InvalidRequest,
+  // This account is Pending — an admin hasn't approved it yet.
+  AccountPending,
+  // The caller isn't an admin, and this op is admin-only.
+  AdminRequired,
+  // No such file, or the caller can't see it (not owned, not in a shared
+  // album they belong to) — the two are indistinguishable on purpose, so a
+  // client can't use the difference to probe for a file_id's existence.
+  FileNotFound,
+  Internal,
+  // UploadChunk didn't start where the server's copy ends: BeginUpload
+  // again to learn where to resume.
+  WrongOffset,
+  // CommitUpload's received bytes don't hash to the declared hash (the file
+  // changed mid-upload). The partial upload is dropped.
+  HashMismatch,
+  // No thumbnail can be made of this file, and the original is too large to
+  // stand in for one: show a placeholder.
+  NoThumbnail,
+  // Too large to send in one message: use DownloadChunkRequest.
+  TooLarge,
+  // No user by that name or id (unsharing: not a member of the album).
+  UserNotFound,
+}
+table Error { code: ErrorCode; message: string (required); }
+
+union ResponseBody {
+  Ack,
+  CreateUserResponse,
+  LoginResponse,
+  UploadFileResponse,
+  DownloadFileResponse,
+  CreateAlbumResponse,
+  RoleOfResponse,
+  ListMyAlbumsResponse,
+  ListFilesResponse,
+  ListTrashResponse,
+  OtpEnrollmentResponse,
+  ListSessionsResponse,
+  ListPendingUsersResponse,
+  Error,
+  FindLibraryFilesByHashResponse,
+  BeginUploadResponse,
+  LibraryPageResponse,
+  DownloadChunkResponse,
+  AlbumMembersResponse,
+}
+
+table Response {
+  request_id: uint64;
+  body: ResponseBody (required);
+}

@@ -1,0 +1,222 @@
+/* Visual refinements layered on top of index.html's base styles — kept in
+   a separate file on purpose, so tweaking how things look never means
+   touching the markup, class names used as on:click/on:submit hooks, or
+   any other behavioral wiring. Every rule here is presentation-only. */
+
+/* ---------------------------------------------------------- icon buttons */
+/* The small, repeated per-item actions (rename a photo, hide an album,
+   restore one from the hidden list) render as a bare pictogram, not text —
+   see web/src/icons.rs. Without this they'd inherit the plain text-button
+   look (visible border, padding meant for a word), which reads as an
+   oversized, oddly-shaped button around one emoji. */
+.icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  font-size: 1em;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  flex: none;
+}
+.icon-button:hover {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--fg);
+}
+
+/* --------------------------------------------------- photo name + rename */
+.file-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9em;
+  color: var(--muted);
+}
+.file-name-input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 0.9em;
+}
+.picture-view .file-name-row {
+  max-width: 480px;
+  margin: 0 auto 10px;
+}
+.picture-view .file-name {
+  font-size: 1.1em;
+  color: var(--fg);
+  font-weight: 600;
+}
+
+/* ------------------------------------------- album detail page toolbar */
+/* This was the roughest corner of the app: "< Albums", the album's own
+   name, and its Rename/Hide actions were all fighting for space on one
+   cramped line with default button spacing. Splitting the back-link onto
+   its own row, and giving the title row real hierarchy (a proper heading
+   size, icon actions trailing it instead of squeezed inline), is most of
+   the fix — the rest was already there. */
+.album-toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 20px;
+}
+.album-toolbar .back-link {
+  align-self: flex-start;
+  font-size: 0.85em;
+  color: var(--muted);
+  text-decoration: none;
+}
+.album-toolbar .back-link:hover {
+  color: var(--accent);
+}
+.album-name-row,
+.album-name-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.album-name-row h2 {
+  margin: 0;
+  font-size: 1.5em;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.album-name-form .rename-input {
+  flex: 1;
+  min-width: 160px;
+  max-width: 320px;
+}
+
+/* -------------------------------------------------------------- dropzone */
+.dropzone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.9em;
+}
+.dropzone::before {
+  content: "";
+  display: block;
+  width: 22px;
+  height: 22px;
+  opacity: 0.5;
+  /* A plain inline SVG "into tray" glyph — no external request, no font
+     icon set to load just for this. */
+  background: currentColor;
+  -webkit-mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 3v10m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>') center / contain no-repeat;
+  mask: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 3v10m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" fill="none" stroke="black" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>') center / contain no-repeat;
+}
+.dropzone.drag-over::before {
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* --------------------------------------------------------- tile artwork */
+.tile img,
+.album-preview img {
+  border-radius: 8px;
+}
+.tile img {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+.tile .placeholder {
+  border: 1px dashed var(--border);
+}
+
+/* Album card: the Hide icon button sits below the preview/name, aligned
+   to the trailing edge — out of the way of the click target (the preview
+   + name, which still opens the album) but still an obvious per-card
+   action, matching the per-photo Hide button's position in an album's own
+   grid. */
+.album-card {
+  display: flex;
+  flex-direction: column;
+}
+.album-card-hide {
+  align-self: flex-end;
+  margin-top: 2px;
+}
+
+/* ------------------------------------------------------------ activity log */
+/* Sits in normal document flow as the last child of .app (not a fixed
+   overlay), so it never covers page content — it's just the last thing on
+   the page, the way a footer is. */
+.activity-log {
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  margin-top: auto;
+}
+.activity-log-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  border-radius: 0;
+  font: inherit;
+  color: var(--muted);
+  cursor: pointer;
+  text-align: left;
+}
+.activity-log-header:hover {
+  color: var(--fg);
+}
+.activity-log-caret {
+  width: 1em;
+  display: inline-block;
+}
+.activity-log-count {
+  color: var(--muted);
+  font-size: 0.85em;
+  background: var(--bg);
+  border-radius: 999px;
+  padding: 1px 8px;
+}
+.activity-log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 16px 10px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.9em;
+}
+.activity-log-list li {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  border-top: 1px solid var(--bg);
+}
+.activity-log-list li:first-child {
+  border-top: none;
+}
+.activity-log-time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+.activity-log-empty {
+  color: var(--muted);
+}

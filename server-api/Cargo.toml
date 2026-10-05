@@ -1,0 +1,25 @@
+[package]
+name = "server-api"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+
+# The program: lestobackupper-server <db-path> [objects-dir] [tcp-addr] [web-addr]
+[[bin]]
+name = "lestobackupper-server"
+path = "src/main.rs"
+
+[dependencies]
+server = { path = "../server" }
+lestobackupper-schema = { path = "../schema" }
+planus = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time", "fs"] }
+tokio-tungstenite = "0.24"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+[dev-dependencies]
+sha2 = "0.10"
+tempfile = "3"

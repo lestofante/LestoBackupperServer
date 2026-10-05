@@ -1,0 +1,3 @@
+[alias]
+# Builds the web client into web/pkg: cargo xtask web
+xtask = "run --quiet --package xtask --"

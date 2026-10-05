@@ -1,0 +1,12 @@
+DROP TABLE album_file;
+DROP INDEX album_name_idx;
+DROP TABLE album_member;
+DROP TABLE album;
+DROP TABLE user_file;
+DROP INDEX file_hash_file_id_idx;
+DROP TABLE file_hash;
+DROP TABLE file;
+DROP INDEX session_user_id_idx;
+DROP TABLE session;
+DROP TABLE credential;
+DROP TABLE app_user;

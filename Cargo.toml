@@ -1,0 +1,6 @@
+# The server side of LestoBackupper. `web` is built separately for the
+# browser (wasm32): `cargo xtask web` (see xtask/).
+[workspace]
+resolver = "2"
+members = ["schema", "server", "server-api", "xtask"]
+exclude = ["web"]

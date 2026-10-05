@@ -1,0 +1,12 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+publish = false
+
+# Project tasks, in Rust (no scripts, no extra tools to install): cargo xtask <task>
+[dependencies]
+# The wasm-bindgen step as a library, instead of the wasm-bindgen-cli
+# program. Must match web/Cargo.toml's wasm-bindgen version exactly.
+wasm-bindgen-cli-support = "=0.2.128"

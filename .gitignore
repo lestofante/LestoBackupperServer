@@ -1,0 +1,9 @@
+/target
+/web/target
+/web/pkg
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.objects/
+*.proptest-regressions

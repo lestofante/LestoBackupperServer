@@ -1,0 +1,10 @@
+{
+  "name": "LestoBackupperServer",
+  "image": "rust:1",
+  "postCreateCommand": "apt-get update && apt-get install -y ffmpeg && rustup component add clippy && rustup target add wasm32-unknown-unknown",
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "tamasfe.even-better-toml"]
+    }
+  }
+}
