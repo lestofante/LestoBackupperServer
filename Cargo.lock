@@ -229,6 +229,7 @@ checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 [[package]]
 name = "chronicler"
 version = "0.1.0"
+source = "git+https://github.com/MauroMombelli/chronicler?branch=main#12a9bf89e85abe94f835322f8e91b20fc87004e9"
 dependencies = [
  "diesel",
  "diesel_migrations",
