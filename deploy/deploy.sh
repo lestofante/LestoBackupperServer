@@ -5,8 +5,11 @@
 #
 #   deploy/deploy.sh myserver
 #
-# One-time setup on the server: see "Deploying" in the README. Only Rust is
-# needed here; the server needs systemd (and ffmpeg, for video thumbnails).
+# The server is built here for the server's CPU, whatever this machine's
+# is, as a static binary (musl): it runs on any Linux there, whatever its C
+# library. Cross-building needs cargo-zigbuild (zig is the C compiler and
+# linker for the C parts: TLS's ring, the bundled SQLite); the script says
+# what's missing. One-time setup on the server: see "Deploying" in the README.
 set -euo pipefail
 
 host=${1:?usage: deploy/deploy.sh <ssh host>}
@@ -14,22 +17,46 @@ dir=lestobackupper # on the server, in the home directory
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
-# The binary runs there as built here: same CPU architecture needed.
-here=$(uname -m)
-there=$(ssh "$host" uname -m)
-if [ "$here" != "$there" ]; then
-    echo "this machine is $here, $host is $there: build on the server instead (see README)" >&2
+# The server's CPU decides what to build.
+arch=$(ssh "$host" uname -m)
+case "$arch" in
+    x86_64 | amd64) target=x86_64-unknown-linux-musl ;;
+    aarch64 | arm64) target=aarch64-unknown-linux-musl ;;
+    armv7* | armv8l) target=armv7-unknown-linux-musleabihf ;;
+    armv6*) target=arm-unknown-linux-musleabihf ;;
+    riscv64) target=riscv64gc-unknown-linux-musl ;;
+    *)
+        echo "$host is $arch: no build target known for it here" >&2
+        exit 1
+        ;;
+esac
+
+# Everything needed to build that, said all at once.
+missing=()
+if ! command -v rustup >/dev/null; then
+    missing+=("Rust through rustup (https://rustup.rs), which can add build targets")
+else
+    installed=$(rustup target list --installed)
+    grep -qx "$target" <<<"$installed" || missing+=("rustup target add $target    # the server's CPU ($arch)")
+    grep -qx wasm32-unknown-unknown <<<"$installed" || missing+=("rustup target add wasm32-unknown-unknown    # the web client")
+fi
+command -v zig >/dev/null || missing+=("zig: sudo pacman -S zig (or https://ziglang.org/download)")
+cargo zigbuild --help >/dev/null 2>&1 || missing+=("cargo install --locked cargo-zigbuild")
+if [ ${#missing[@]} -gt 0 ]; then
+    echo "To build for $host ($arch, Rust target $target), install first:" >&2
+    printf '  %s\n' "${missing[@]}" >&2
     exit 1
 fi
 
-echo "== building"
-cargo build --release --bin lestobackupper-server
+echo "== building for $host ($target)"
+cargo zigbuild --release --target "$target" --bin lestobackupper-server
 cargo xtask web
+binary=target/$target/release
 
 echo "== uploading to $host:~/$dir"
 # One tar stream over ssh: the binary and the web client, swapped in with
 # renames so a running server keeps its files until it restarts.
-tar -czf - -C target/release lestobackupper-server -C "$root/web" index.html style.css pkg \
+tar -czf - -C "$binary" lestobackupper-server -C "$root/web" index.html style.css pkg \
     | ssh "$host" "set -e
         mkdir -p ~/$dir/data ~/$dir/.upload
         rm -rf ~/$dir/.upload/*

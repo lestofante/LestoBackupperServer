@@ -46,10 +46,20 @@ server there. `<host>` is anything ssh takes, a `~/.ssh/config` name too:
 deploy/deploy.sh myserver
 ```
 
-It needs the server to have the same CPU architecture as this machine (it
-checks), and the one-time setup below. Everything goes in `~/lestobackupper`
-on the server: the program, `web/`, and `data/` (database, stored photos,
-TLS certificate: back this one up).
+It builds for the server's CPU (asked over ssh: x86_64, ARM 64/32-bit,
+RISC-V) as a static binary, so a slow server never compiles anything and
+its Linux distribution doesn't matter. Cross-building needs, once, on this
+machine (the script lists whatever is missing):
+
+```sh
+rustup target add aarch64-unknown-linux-musl   # the server's CPU: the script names it
+rustup target add wasm32-unknown-unknown       # the web client
+sudo pacman -S zig                             # C compiler/linker for any CPU (or ziglang.org)
+cargo install --locked cargo-zigbuild
+```
+
+Everything goes in `~/lestobackupper` on the server: the program, `web/`,
+and `data/` (database, stored photos, TLS certificate: back this one up).
 
 ### One-time setup on the server
 
@@ -64,21 +74,19 @@ scp deploy/lestobackupper.service myserver:.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable lestobackupper
 sudo loginctl enable-linger $USER   # keep it running after logout, start it at boot
-sudo apt install ffmpeg             # optional: video thumbnails (or your distro's package)
+sudo pacman -S ffmpeg               # optional: video thumbnails (Debian: apt install ffmpeg)
 ```
 
 Then `deploy/deploy.sh myserver` from here. It prints the certificate's
 fingerprint: the app asks you to confirm it on first login. Port 9000 must
 be reachable from your phone (firewall).
 
-By hand, without the script: copy `target/release/lestobackupper-server`
-to `~/lestobackupper/` and `web/index.html`, `web/style.css`, `web/pkg/` to
+By hand, without the script: build with
+`cargo zigbuild --release --target <target> --bin lestobackupper-server` and
+`cargo xtask web`, copy `target/<target>/release/lestobackupper-server` to
+`~/lestobackupper/` and `web/index.html`, `web/style.css`, `web/pkg/` to
 `~/lestobackupper/web/`, then `systemctl --user restart lestobackupper`.
 Logs: `journalctl --user -u lestobackupper -f`.
-
-If the server's CPU differs (e.g. an ARM board), build there instead: clone
-this repository on it, `cargo build --release --bin lestobackupper-server`,
-`cargo xtask web`, and copy the same files.
 
 ## Test
 
