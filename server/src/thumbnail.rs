@@ -19,12 +19,13 @@
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Condvar, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use image::codecs::jpeg::JpegEncoder;
-use image::{DynamicImage, ImageDecoder, ImageReader, ImageResult};
+use image::{DynamicImage, ImageDecoder, ImageReader, ImageResult, Limits};
 
 use crate::blob;
 use crate::object_id::ObjectId;
@@ -54,6 +55,46 @@ impl ThumbnailSize {
 /// A broken file can make ffmpeg spin; it must not hold a server thread forever.
 const FFMPEG_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Making a thumbnail decodes the whole original (a 12-megapixel photo is
+/// tens of MB of pixels; ffmpeg buffers frames too), and a gallery asks for
+/// dozens at once: unlimited, that exhausted a small server's memory. Only
+/// this many are made at a time; the others wait (and often find theirs
+/// cached by then).
+static MAX_AT_ONCE: AtomicUsize = AtomicUsize::new(2);
+static RUNNING: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+
+/// How many thumbnails may be made at the same time (at least 1).
+pub fn set_max_at_once(n: usize) {
+    MAX_AT_ONCE.store(n.max(1), Ordering::Relaxed);
+}
+
+/// A turn at making a thumbnail, until dropped.
+struct Turn;
+
+impl Turn {
+    fn wait() -> Turn {
+        let (lock, freed) = &RUNNING;
+        let mut running = lock.lock().unwrap_or_else(|e| e.into_inner());
+        while *running >= MAX_AT_ONCE.load(Ordering::Relaxed) {
+            running = freed.wait(running).unwrap_or_else(|e| e.into_inner());
+        }
+        *running += 1;
+        Turn
+    }
+}
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let (lock, freed) = &RUNNING;
+        *lock.lock().unwrap_or_else(|e| e.into_inner()) -= 1;
+        freed.notify_one();
+    }
+}
+
+/// Largest allocation one image decode may make: past it (a huge or
+/// malicious image) the decoder gives up and ffmpeg is tried instead.
+const MAX_DECODE_BYTES: u64 = 256 * 1024 * 1024;
+
 fn cache_path(objects_dir: &Path, hash: &ObjectId, size: ThumbnailSize) -> PathBuf {
     objects_dir.join(format!("{hash}.thumb-{}.jpg", size.suffix()))
 }
@@ -71,6 +112,11 @@ pub fn get_or_create(objects_dir: &Path, hash: &ObjectId, mime: &str, size: Thum
     let is_video = mime.starts_with("video/");
     if !is_video && !mime.starts_with("image/") {
         return Ok(None);
+    }
+    let _turn = Turn::wait();
+    // Made by another request while this one waited.
+    if let Ok(bytes) = std::fs::read(&cache) {
+        return Ok(Some(bytes));
     }
     let source = blob::path(objects_dir, hash);
     let resized = if is_video {
@@ -93,6 +139,9 @@ pub fn get_or_create(objects_dir: &Path, hash: &ObjectId, mime: &str, size: Thum
 
 fn decode_and_resize(original: &[u8], size: ThumbnailSize) -> Option<Vec<u8>> {
     let mut decoder = ImageReader::new(Cursor::new(original)).with_guessed_format().ok()?.into_decoder().ok()?;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_DECODE_BYTES);
+    decoder.set_limits(limits).ok()?;
     // Phones often store the pixels sideways plus an EXIF "rotate me" flag.
     let orientation = decoder.orientation().ok();
     let mut img = DynamicImage::from_decoder(decoder).ok()?;

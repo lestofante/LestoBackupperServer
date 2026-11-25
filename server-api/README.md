@@ -84,6 +84,7 @@ Settings, all optional (the older `EVENTLOG_*` names are still accepted):
 |---|---|---|
 | `LESTO_WEB_DIR` | `./web` | the built web client |
 | `LESTO_TLS_CERT`, `LESTO_TLS_KEY` | made on first start | PEM certificate and key; by default a self-signed one is made next to the database (`<db>.tls-cert.pem`, `<db>.tls-key.pem`) |
+| `LESTO_THUMBNAIL_JOBS` | 2 | thumbnails made at the same time; each decodes a whole photo in memory, so keep it low on a small server |
 | `LESTO_SCRUB_INTERVAL_DAYS` | 7 | re-check each stored file's integrity this often; 0 = never |
 | `LESTO_SCRUB_MAX_MIBPS` | 50 | read speed cap for that check |
 | `LESTO_UPLOAD_EXPIRY_DAYS` | 7 | delete unfinished uploads untouched this long |

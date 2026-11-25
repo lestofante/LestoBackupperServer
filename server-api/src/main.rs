@@ -31,6 +31,10 @@ async fn main() {
     tracing::info!(fingerprint = %tls.fingerprint, "TLS certificate (SHA-256): the app shows this fingerprint on first login");
     server_api::tls::configure(tls);
 
+    // Thumbnails decode whole photos: only a few at a time (server::thumbnail).
+    let thumbnail_jobs = server_api::config_thumbnail_jobs();
+    server::thumbnail::set_max_at_once(thumbnail_jobs);
+
     // The web client, served on the same port (web.rs).
     let web_dir = server_api::web::dir_from_env();
     server_api::web::configure(web_dir.clone());

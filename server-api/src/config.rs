@@ -22,3 +22,11 @@ pub(crate) fn env_f64(name: &str, default: f64) -> f64 {
         }),
     }
 }
+
+/// `LESTO_THUMBNAIL_JOBS` (default 2): thumbnails made at the same time.
+/// Each decodes a whole photo in memory: keep it low on a small server.
+pub fn thumbnail_jobs() -> usize {
+    let jobs = env_f64("THUMBNAIL_JOBS", 2.0).max(1.0) as usize;
+    tracing::info!(jobs, "thumbnails made at the same time (LESTO_THUMBNAIL_JOBS)");
+    jobs
+}

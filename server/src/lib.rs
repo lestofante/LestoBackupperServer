@@ -15,7 +15,7 @@ pub mod queries;
 mod schema;
 pub mod scrub;
 mod session_cache;
-mod thumbnail;
+pub mod thumbnail;
 mod time;
 mod token;
 
