@@ -9,9 +9,11 @@
 //   blob"), so no `file_hash` row names them;
 // - unreferenced blobs: files that every library and album dropped
 //   (server.md's "Blob lifetime"). Album trash still counts as a reference,
-//   since the owner can restore from it. These are reclaimed only after
-//   staying unreferenced for `Settings::reclaim_after`: until then the bytes
-//   are still there, and uploading the same file again ends the wait.
+//   since the owner can restore from it. By default they're never
+//   reclaimed (deleting only marks a file deleted); with
+//   `Settings::reclaim_after` set, after staying unreferenced that long.
+//   Until then the bytes are still there, and uploading the same file
+//   again ends the wait.
 //
 // Never touches `.corrupt/` (kept for a human) or names it doesn't know.
 //
@@ -63,7 +65,9 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             upload_expiry: Duration::from_secs(7 * 24 * 3600),
-            reclaim_after: Some(Duration::from_secs(30 * 24 * 3600)),
+            // Never by default: a file taken out of every library and album
+            // is only marked deleted, its bytes kept (LESTO_RECLAIM_AFTER_DAYS).
+            reclaim_after: None,
             leftover_min_age: LEFTOVER_MIN_AGE,
         }
     }

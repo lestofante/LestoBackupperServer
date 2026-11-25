@@ -81,7 +81,7 @@ Settings, all optional (the older `EVENTLOG_*` names are still accepted):
 | `LESTO_SCRUB_INTERVAL_DAYS` | 7 | re-check each stored file's integrity this often; 0 = never |
 | `LESTO_SCRUB_MAX_MIBPS` | 50 | read speed cap for that check |
 | `LESTO_UPLOAD_EXPIRY_DAYS` | 7 | delete unfinished uploads untouched this long |
-| `LESTO_RECLAIM_AFTER_DAYS` | 30 | free files no library or album holds after this long; 0 = keep forever |
+| `LESTO_RECLAIM_AFTER_DAYS` | 0 | free files no library or album holds after this many days; 0 = keep them forever (deleting only marks them deleted) |
 
 On the very first run against a given database, this creates a default
 `admin`/`admin` account (see `server::commands::user::ensure_bootstrap_admin`

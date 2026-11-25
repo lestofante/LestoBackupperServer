@@ -13,11 +13,11 @@ const DAY: f64 = 86_400.0;
 
 /// `LESTO_UPLOAD_EXPIRY_DAYS` (default 7): how long an unfinished chunked
 /// upload may sit untouched before it's deleted. `LESTO_RECLAIM_AFTER_DAYS`
-/// (default 30; 0 keeps everything forever): how long a file no library or
+/// (default 0, keeping everything forever): how long a file no library or
 /// album references keeps its bytes on disk.
 pub fn settings_from_env() -> server::housekeeping::Settings {
     let expiry_days = env_f64("UPLOAD_EXPIRY_DAYS", 7.0).max(0.0);
-    let reclaim_days = env_f64("RECLAIM_AFTER_DAYS", 30.0);
+    let reclaim_days = env_f64("RECLAIM_AFTER_DAYS", 0.0);
     tracing::info!(
         upload_expiry_days = expiry_days,
         reclaim_after_days = reclaim_days,
