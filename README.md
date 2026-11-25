@@ -29,10 +29,11 @@ cargo xtask web                                     # build the web client
 cargo run --release --bin lestobackupper-server -- data/lesto.db
 ```
 
-The app connects to port 9000; open `http://<server>:9001/` in a browser.
+The app connects to port 9000, and so does a browser: `https://<server>:9000/`.
 The first run creates an `admin`/`admin` account: change its password.
-Options and settings: `server-api/README.md`. Plain TCP for now (no TLS):
-keep it on your LAN or behind a VPN.
+Options and settings: `server-api/README.md`. Connections use TLS with a
+certificate the server makes itself: the app asks you to trust its
+fingerprint (logged at startup) on first login.
 
 Only Rust is needed (and `ffmpeg` for video thumbnails).
 

@@ -32,22 +32,15 @@ pub fn object_url_for(bytes: &[u8], mime: &str) -> Result<String, JsValue> {
 }
 
 /// The server's WebSocket: the same host and port this page was served
-/// from (lestobackupper-server serves the web client on its WebSocket port),
-/// `wss://` if the page came over https, since browsers block plaintext
-/// WebSockets from secure pages. Falls back to 127.0.0.1:9001 without a
-/// usable location (the page opened from a file).
+/// from (lestobackupper-server serves the web client on its one port),
+/// always wss://, the server only speaking TLS. Falls back to
+/// 127.0.0.1:9000 without a usable location (the page opened from a file).
 pub fn server_ws_url() -> String {
-    let location = web_sys::window().map(|w| w.location());
-    let host = location
-        .as_ref()
-        .and_then(|l| l.host().ok()) // "host:port", IPv6 already bracketed
+    let host = web_sys::window()
+        .and_then(|w| w.location().host().ok()) // "host:port", IPv6 already bracketed
         .filter(|h| !h.is_empty())
-        .unwrap_or_else(|| "127.0.0.1:9001".to_string());
-    let scheme = match location.and_then(|l| l.protocol().ok()).as_deref() {
-        Some("https:") => "wss",
-        _ => "ws",
-    };
-    format!("{scheme}://{host}/")
+        .unwrap_or_else(|| "127.0.0.1:9000".to_string());
+    format!("wss://{host}/")
 }
 
 pub fn local_storage_get(key: &str) -> Option<String> {

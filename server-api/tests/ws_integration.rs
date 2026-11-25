@@ -8,18 +8,15 @@
 // to approve the new user first — over the wire, via ApproveUserRequest,
 // same as tests/tcp_integration.rs.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use lestobackupper_schema::protocol::{ApproveUserRequest, CreateUserRequest, ListLibraryRequest, LoginRequest, Request, RequestBody, Response, ResponseBody, ResponseRef};
 use futures_util::{SinkExt, StreamExt};
 use planus::ReadAsRoot;
-use server::{EventLog, NodeId, Server};
-use server_api::ws;
-use tokio::net::TcpListener;
 use tokio::sync::Mutex;
+
+mod common;
 use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::MaybeTlsStream;
 
 static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
@@ -27,25 +24,13 @@ async fn wait_out_rate_limit() {
     tokio::time::sleep(Duration::from_millis(1100)).await;
 }
 
-type WsStream = tokio_tungstenite::WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
+type WsStream = tokio_tungstenite::WebSocketStream<common::Conn>;
 
+/// A browser's connection: TLS, then a WebSocket upgrade on the same port the app uses.
 async fn spawn_server() -> (tempfile::TempDir, WsStream) {
-    let dir = tempfile::tempdir().unwrap();
-    let log = EventLog::<Server>::open(dir.path().join("test.db"), NodeId("n".to_string())).unwrap();
-    server::commands::user::ensure_bootstrap_admin(&log).unwrap();
-    let state = Arc::new(server_api::AppState { log, objects_dir: dir.path().join("objects") });
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else { continue };
-            tokio::spawn(ws::handle_connection(stream, state.clone()));
-        }
-    });
-
-    let (client, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/")).await.unwrap();
+    let (dir, addr) = common::spawn_server().await;
+    let tls = common::connect(addr).await;
+    let (client, _) = tokio_tungstenite::client_async(format!("wss://{addr}/"), tls).await.unwrap();
     (dir, client)
 }
 

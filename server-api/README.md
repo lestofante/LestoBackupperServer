@@ -59,25 +59,31 @@ dispatched requests can't interleave their responses mid-frame.
 ```sh
 cargo xtask web          # once, and after changing the web client: builds web/pkg
 cargo run --release --bin lestobackupper-server -- /tmp/lesto.db
-cargo run --release --bin lestobackupper-server -- /tmp/lesto.db /tmp/objects 0.0.0.0:9000 0.0.0.0:9001
-#                                                  db path       objects dir  app (TCP)    web + WebSocket
+cargo run --release --bin lestobackupper-server -- /tmp/lesto.db /tmp/objects 0.0.0.0:9000
+#                                                  db path       objects dir  address
 ```
 
-Every argument after the db path is optional and positional. Both
-listeners bind all interfaces (`0.0.0.0`) by default so phones on the LAN
-can connect — and both are plaintext, so pass `127.0.0.1:...` addresses
-explicitly to keep a dev instance local-only.
+Every argument after the db path is optional and positional. It binds all
+interfaces (`0.0.0.0`) by default so phones on the LAN can connect.
 
-The web client is served on the WebSocket port (`src/web.rs`): open
-`http://<server>:9001/`. A request asking for a WebSocket goes to the API,
-any other is a file of the built client, from `LESTO_WEB_DIR` (default
-`./web`, so running from the repository root just works).
+One port, TLS only (`src/tls.rs`, `src/connection.rs`): the app and
+browsers both connect to it, told apart after the TLS handshake (a browser
+sends an HTTP request, the app a length-prefixed frame). The certificate's
+SHA-256 fingerprint is logged at startup: the app shows the same
+fingerprint on first login, to compare, and then pins it, so no
+certificate authority is needed.
+
+The web client is at `https://<server>:9000/` (browsers warn once about
+the self-signed certificate). A request asking for a WebSocket goes to the
+API, any other is a file of the built client, from `LESTO_WEB_DIR`
+(default `./web`, so running from the repository root just works).
 
 Settings, all optional (the older `EVENTLOG_*` names are still accepted):
 
 | Variable | Default | |
 |---|---|---|
 | `LESTO_WEB_DIR` | `./web` | the built web client |
+| `LESTO_TLS_CERT`, `LESTO_TLS_KEY` | made on first start | PEM certificate and key; by default a self-signed one is made next to the database (`<db>.tls-cert.pem`, `<db>.tls-key.pem`) |
 | `LESTO_SCRUB_INTERVAL_DAYS` | 7 | re-check each stored file's integrity this often; 0 = never |
 | `LESTO_SCRUB_MAX_MIBPS` | 50 | read speed cap for that check |
 | `LESTO_UPLOAD_EXPIRY_DAYS` | 7 | delete unfinished uploads untouched this long |
@@ -110,6 +116,4 @@ flow driven end to end over a real socket.
 
 ## What's not here yet
 
-Same list as `../server`'s README, plus: no TLS on either transport (both
-are plaintext — fine for local development, not for anything reachable
-over an untrusted network).
+Same list as `../server`'s README.

@@ -1,4 +1,4 @@
-// Drives the real TCP transport end to end: a genuine socket, real framing,
+// Drives the app's transport end to end, over TLS (common/): a genuine socket, real framing,
 // real flatbuffers encode/decode on both ends — the only thing skipped is
 // spawning the built binary as a separate process, which would test the
 // same code path with more moving parts for no more confidence.
@@ -15,7 +15,6 @@
 // to approve one first — over the wire, via ApproveUserRequest, the same
 // way a real admin client would.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use lestobackupper_schema::protocol::{
@@ -23,11 +22,11 @@ use lestobackupper_schema::protocol::{
     ResponseRef, UploadChunkRequest, UploadFileRequest,
 };
 use planus::ReadAsRoot;
-use server::{EventLog, NodeId, Server};
-use server_api::tcp;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+
+mod common;
+use common::Conn;
 
 static TEST_LOCK: Mutex<()> = Mutex::const_new(());
 
@@ -35,26 +34,7 @@ async fn wait_out_rate_limit() {
     tokio::time::sleep(Duration::from_millis(1100)).await;
 }
 
-async fn spawn_server() -> (tempfile::TempDir, std::net::SocketAddr) {
-    let dir = tempfile::tempdir().unwrap();
-    let log = EventLog::<Server>::open(dir.path().join("test.db"), NodeId("n".to_string())).unwrap();
-    server::commands::user::ensure_bootstrap_admin(&log).unwrap();
-    let state = Arc::new(server_api::AppState { log, objects_dir: dir.path().join("objects") });
-
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        loop {
-            let Ok((stream, _)) = listener.accept().await else { continue };
-            tokio::spawn(tcp::handle_connection(stream, state.clone()));
-        }
-    });
-
-    (dir, addr)
-}
-
-async fn send(stream: &mut TcpStream, request_id: u64, token: Option<&str>, body: RequestBody) -> Response {
+async fn send(stream: &mut Conn, request_id: u64, token: Option<&str>, body: RequestBody) -> Response {
     let mut builder = planus::Builder::new();
     let req = Request { request_id, token: token.map(str::to_string), body };
     let bytes = builder.finish(&req, None);
@@ -71,7 +51,7 @@ async fn send(stream: &mut TcpStream, request_id: u64, token: Option<&str>, body
 }
 
 /// Writes a request without waiting for its answer (see `receive`).
-async fn send_only(stream: &mut TcpStream, request_id: u64, token: Option<&str>, body: RequestBody) {
+async fn send_only(stream: &mut Conn, request_id: u64, token: Option<&str>, body: RequestBody) {
     let mut builder = planus::Builder::new();
     let req = Request { request_id, token: token.map(str::to_string), body };
     let bytes = builder.finish(&req, None);
@@ -80,14 +60,14 @@ async fn send_only(stream: &mut TcpStream, request_id: u64, token: Option<&str>,
     stream.flush().await.unwrap();
 }
 
-async fn receive(stream: &mut TcpStream) -> Response {
+async fn receive(stream: &mut Conn) -> Response {
     let len = stream.read_u32().await.unwrap();
     let mut buf = vec![0u8; len as usize];
     stream.read_exact(&mut buf).await.unwrap();
     Response::try_from(ResponseRef::read_as_root(&buf).unwrap()).unwrap()
 }
 
-async fn login(stream: &mut TcpStream, username: &str, password: &str) -> Response {
+async fn login(stream: &mut Conn, username: &str, password: &str) -> Response {
     send(stream, 0, None, RequestBody::LoginRequest(Box::new(LoginRequest { username: username.to_string(), password: password.to_string(), otp_code: None, device_label: "test".to_string() })))
         .await
 }
@@ -102,7 +82,7 @@ fn expect_login_token(resp: Response) -> String {
 // account happened to already be active), then logs the new user in.
 // Leaves at least `wait_out_rate_limit` spacing around both logins it
 // performs — callers still need one more before their *own* next login.
-async fn register_and_login_approved(stream: &mut TcpStream, username: &str, password: &str) -> String {
+async fn register_and_login_approved(stream: &mut Conn, username: &str, password: &str) -> String {
     let create_resp =
         send(stream, 0, None, RequestBody::CreateUserRequest(Box::new(CreateUserRequest { username: username.to_string(), password: password.to_string() }))).await;
     let ResponseBody::CreateUserResponse(created) = create_resp.body else { panic!("expected CreateUserResponse, got {:?}", create_resp.body) };
@@ -121,8 +101,8 @@ async fn register_and_login_approved(stream: &mut TcpStream, username: &str, pas
 async fn create_user_login_and_call_a_protected_op() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
 
     let token = register_and_login_approved(&mut stream, "alice", "hunter2").await;
     assert!(!token.is_empty());
@@ -135,8 +115,8 @@ async fn create_user_login_and_call_a_protected_op() {
 
 #[tokio::test]
 async fn protected_op_without_a_token_is_rejected() {
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
 
     let resp = send(&mut stream, 1, None, RequestBody::ListLibraryRequest(Box::new(ListLibraryRequest {}))).await;
     let ResponseBody::Error(err) = resp.body else { panic!("expected Error, got {:?}", resp.body) };
@@ -147,8 +127,8 @@ async fn protected_op_without_a_token_is_rejected() {
 async fn malformed_id_field_is_rejected_as_invalid_request() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
 
     let token = register_and_login_approved(&mut stream, "bob", "swordfish").await;
 
@@ -161,8 +141,8 @@ async fn malformed_id_field_is_rejected_as_invalid_request() {
 async fn pending_account_is_rejected_until_an_admin_approves_it_over_the_wire() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
 
     send(&mut stream, 0, None, RequestBody::CreateUserRequest(Box::new(CreateUserRequest { username: "carol".to_string(), password: "pw".to_string() }))).await;
 
@@ -181,8 +161,8 @@ async fn pending_account_is_rejected_until_an_admin_approves_it_over_the_wire() 
 async fn upload_then_download_round_trips_real_bytes_over_the_wire() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
 
     let token = register_and_login_approved(&mut stream, "alice", "hunter2").await;
 
@@ -217,8 +197,8 @@ async fn upload_then_download_round_trips_real_bytes_over_the_wire() {
 async fn find_library_files_by_hash_reports_what_was_uploaded() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
 
     let token = register_and_login_approved(&mut stream, "alice", "hunter2").await;
 
@@ -251,8 +231,8 @@ async fn find_library_files_by_hash_reports_what_was_uploaded() {
 async fn library_pages_and_ranged_downloads_over_the_wire() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
     let token = register_and_login_approved(&mut stream, "alice", "hunter2").await;
 
     let mut ids = Vec::new();
@@ -311,8 +291,8 @@ async fn library_pages_and_ranged_downloads_over_the_wire() {
 async fn non_admin_cannot_approve_accounts() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
 
     let alice_token = register_and_login_approved(&mut stream, "alice", "hunter2").await;
 
@@ -330,8 +310,8 @@ async fn pipelined_chunks_are_stored_in_order() {
 
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
     let token = register_and_login_approved(&mut stream, "alice", "hunter2").await;
 
     // Different bytes in every chunk, so a chunk stored in the wrong place shows.
@@ -398,8 +378,8 @@ async fn pipelined_chunks_are_stored_in_order() {
 async fn sharing_an_album_by_username_over_the_wire() {
     let _guard = TEST_LOCK.lock().await;
     wait_out_rate_limit().await;
-    let (_dir, addr) = spawn_server().await;
-    let mut stream = TcpStream::connect(addr).await.unwrap();
+    let (_dir, addr) = common::spawn_server().await;
+    let mut stream = common::connect(addr).await;
     let token = register_and_login_approved(&mut stream, "alice", "hunter2").await;
     let created = send(&mut stream, 0, None, RequestBody::CreateUserRequest(Box::new(CreateUserRequest { username: "bob".to_string(), password: "pw".to_string() }))).await;
     assert!(matches!(created.body, ResponseBody::CreateUserResponse(_)));

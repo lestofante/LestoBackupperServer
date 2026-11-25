@@ -42,8 +42,8 @@ Node. It produces `pkg/lestobackupper_web.js` and
 `pkg/lestobackupper_web_bg.wasm`, which `index.html` loads via a plain
 `<script type="module">`.
 
-`lestobackupper-server` serves this directory on its WebSocket port, so
-open `http://<server>:9001/` and the client connects back to the same
+`lestobackupper-server` serves this directory on its one port, so open
+`https://<server>:9000/` and the client connects back to the same
 address. Routing happens client-side (`/albums/<id>`, `/settings`, ...
 aren't files): the server answers any path that isn't a file with
 `index.html`, so bookmarks and reloads work. Behind another web server,

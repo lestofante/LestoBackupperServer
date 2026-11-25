@@ -7,27 +7,29 @@
 // other.
 
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::Instrument;
 
 use crate::dispatch::SharedState;
+use crate::web::Replay;
 use crate::lane::{self, OrderedLane};
 use crate::{decode_request, dispatch, encode_error, encode_response};
 
-/// A connection to the web port: a WebSocket for the client's requests, or
-/// a plain HTTP request for one of the client's files (web.rs).
-pub async fn handle_connection(stream: TcpStream, state: SharedState) {
-    let peer = stream.peer_addr().map_or_else(|_| "?".to_string(), |a| a.to_string());
-    if !crate::web::wants_websocket(&stream).await {
-        crate::web::serve_file(stream).instrument(tracing::debug_span!("http", %peer)).await;
+/// A browser's connection (connection.rs decided it is one): a WebSocket
+/// for the client's requests, or an HTTP request for one of the client's
+/// files (web.rs).
+pub(crate) async fn route<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(mut stream: S, state: SharedState, peer: String) {
+    let Some(head) = crate::web::read_head(&mut stream).await else { return };
+    if !crate::web::is_websocket(&head) {
+        crate::web::serve_file(stream, &head).instrument(tracing::debug_span!("http", %peer)).await;
         return;
     }
-    serve(stream, state).instrument(tracing::info_span!("ws", %peer)).await
+    serve(Replay::new(head, stream), state).instrument(tracing::info_span!("ws", %peer)).await
 }
 
-async fn serve(stream: TcpStream, state: SharedState) {
+async fn serve<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(stream: S, state: SharedState) {
     let ws_stream = match tokio_tungstenite::accept_async(stream).await {
         Ok(ws) => ws,
         Err(_) => return, // not a valid WS handshake

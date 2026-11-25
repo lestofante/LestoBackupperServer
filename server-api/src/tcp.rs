@@ -11,8 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
@@ -27,21 +26,17 @@ const MAX_FRAME_BYTES: u32 = 16 * 1024 * 1024;
 /// so a per-request rate would be noise.
 const RATE_MIN_BYTES: u32 = 64 * 1024;
 
-/// Every log line from this connection carries its peer address (and, from
-/// inside a request, that request's size and transfer rate) via spans.
-pub async fn handle_connection(stream: TcpStream, state: SharedState) {
-    let peer = stream.peer_addr().map_or_else(|_| "?".to_string(), |a| a.to_string());
-    serve(stream, state).instrument(tracing::info_span!("tcp", %peer)).await
-}
-
-async fn serve(stream: TcpStream, state: SharedState) {
+/// One app connection (connection.rs decided it is one). Every log line
+/// from it carries its peer address (and, from inside a request, that
+/// request's size and transfer rate) via spans.
+pub(crate) async fn serve<S: AsyncRead + AsyncWrite + Send + 'static>(stream: S, state: SharedState) {
     tracing::info!("connected");
     let connected_at = Instant::now();
     let (mut requests, mut received, mut receiving, mut idle) = (0u64, 0u64, Duration::ZERO, Duration::ZERO);
     // Summed across request tasks, which run concurrently: can exceed wall time.
     let processing_nanos = Arc::new(AtomicU64::new(0));
 
-    let (mut reader, mut writer) = stream.into_split();
+    let (mut reader, mut writer) = tokio::io::split(stream);
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
     // One writer task drains the channel — the only thing allowed to touch

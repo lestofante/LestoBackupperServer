@@ -10,10 +10,10 @@
 
 use std::path::{Component, Path, PathBuf};
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, ReadBuf};
 
 static WEB_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -35,43 +35,34 @@ fn dir() -> Option<&'static Path> {
 /// Requests bigger than this aren't a browser asking for a file.
 const MAX_HEAD: usize = 16 * 1024;
 
-/// Looks at the request without consuming it: true if it asks for a
-/// WebSocket (ws.rs then reads it as usual).
-pub async fn wants_websocket(stream: &TcpStream) -> bool {
-    let mut buf = vec![0u8; MAX_HEAD];
-    for _ in 0..50 {
-        let Ok(n) = stream.peek(&mut buf).await else { return false };
-        let head = &buf[..n];
-        if n == 0 {
-            return false;
+/// Reads an HTTP request's head (up to the blank line). None if the
+/// connection closes first or the head is too big to be a browser's.
+pub async fn read_head<S: AsyncRead + Unpin>(stream: &mut S) -> Option<Vec<u8>> {
+    let mut head = Vec::with_capacity(1024);
+    let mut byte = [0u8; 1];
+    while find(&head, b"\r\n\r\n").is_none() {
+        match stream.read(&mut byte).await {
+            Ok(1) if head.len() < MAX_HEAD => head.push(byte[0]),
+            _ => return None,
         }
-        if let Some(end) = find(head, b"\r\n\r\n") {
-            let text = String::from_utf8_lossy(&head[..end]).to_ascii_lowercase();
-            return text.lines().any(|l| l.starts_with("upgrade:") && l.contains("websocket"));
-        }
-        if n == MAX_HEAD {
-            return false;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await; // the rest of the head is on its way
     }
-    false
+    Some(head)
+}
+
+/// Whether the request asks to upgrade to a WebSocket.
+pub fn is_websocket(head: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(head).to_ascii_lowercase();
+    text.lines().any(|l| l.starts_with("upgrade:") && l.contains("websocket"))
 }
 
 fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
-/// Answers one plain HTTP request with a file of the web client, then closes.
-pub async fn serve_file(mut stream: TcpStream) {
-    let mut head = Vec::with_capacity(1024);
-    let mut byte = [0u8; 1];
-    while find(&head, b"\r\n\r\n").is_none() {
-        match stream.read(&mut byte).await {
-            Ok(1) if head.len() < MAX_HEAD => head.push(byte[0]),
-            _ => return,
-        }
-    }
-    let request = String::from_utf8_lossy(&head);
+/// Answers one plain HTTP request, whose head was already read, with a file
+/// of the web client, then closes.
+pub async fn serve_file<S: AsyncWrite + Unpin>(mut stream: S, head: &[u8]) {
+    let request = String::from_utf8_lossy(head);
     let mut parts = request.lines().next().unwrap_or("").split_whitespace();
     let (method, target) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
     let response = match method {
@@ -80,6 +71,46 @@ pub async fn serve_file(mut stream: TcpStream) {
     };
     let _ = stream.write_all(&response).await;
     let _ = stream.shutdown().await;
+}
+
+/// A stream that first gives back bytes already read from it (the request
+/// head looked at to route the connection), then reads on as usual: the
+/// WebSocket handshake needs to see the whole request.
+pub struct Replay<S> {
+    head: Vec<u8>,
+    at: usize,
+    inner: S,
+}
+
+impl<S> Replay<S> {
+    pub fn new(head: Vec<u8>, inner: S) -> Self {
+        Replay { head, at: 0, inner }
+    }
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for Replay<S> {
+    fn poll_read(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<std::io::Result<()>> {
+        if self.at < self.head.len() {
+            let n = buf.remaining().min(self.head.len() - self.at);
+            let at = self.at;
+            buf.put_slice(&self.head[at..at + n]);
+            self.at += n;
+            return Poll::Ready(Ok(()));
+        }
+        Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for Replay<S> {
+    fn poll_write(mut self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
 }
 
 async fn respond(target: &str, head_only: bool) -> Vec<u8> {
