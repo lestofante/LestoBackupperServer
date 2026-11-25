@@ -17,8 +17,16 @@ dir=lestobackupper # on the server, in the home directory
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
+# Runs a script on the server with sh, whatever the login shell there is
+# (ssh hands commands to it: fish, for one, doesn't read sh syntax). The
+# script goes inside single quotes, so it must not contain any.
+remote() {
+    case "$1" in *"'"*) echo "deploy.sh bug: a remote script contains a single quote" >&2; exit 2 ;; esac
+    ssh "$host" "sh -c '$1'"
+}
+
 # The server's CPU decides what to build.
-arch=$(ssh "$host" uname -m)
+arch=$(remote "uname -m")
 case "$arch" in
     x86_64 | amd64) target=x86_64-unknown-linux-musl ;;
     aarch64 | arm64) target=aarch64-unknown-linux-musl ;;
@@ -57,7 +65,7 @@ echo "== uploading to $host:~/$dir"
 # One tar stream over ssh: the binary and the web client, swapped in with
 # renames so a running server keeps its files until it restarts.
 tar -czf - -C "$binary" lestobackupper-server -C "$root/web" index.html style.css pkg \
-    | ssh "$host" "set -e
+    | remote "set -e
         mkdir -p ~/$dir/data ~/$dir/.upload
         rm -rf ~/$dir/.upload/*
         tar -xzf - -C ~/$dir/.upload
@@ -70,12 +78,12 @@ tar -czf - -C "$binary" lestobackupper-server -C "$root/web" index.html style.cs
         rm -rf ~/$dir/web.old ~/$dir/.upload"
 
 echo "== restarting"
-ssh "$host" "set -e
+remote "set -e
     if ! systemctl --user cat lestobackupper >/dev/null 2>&1; then
-        echo 'no lestobackupper user service on this machine yet: see \"Deploying\" in the README' >&2
+        echo \"no lestobackupper user service on this machine yet: see Deploying in the README\" >&2
         exit 1
     fi
     systemctl --user restart lestobackupper
     sleep 2
     systemctl --user --no-pager --lines=0 status lestobackupper | head -3
-    journalctl --user -u lestobackupper --since '-1min' --no-pager -o cat | grep -E 'fingerprint|listening|web client|ERROR|WARN' | tail -6 || true"
+    journalctl --user -u lestobackupper --since -1min --no-pager -o cat | grep -E \"fingerprint|listening|web client|ERROR|WARN\" | tail -6 || true"
