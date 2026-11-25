@@ -1,0 +1,21 @@
+# LestoBackupper server as a systemd *user* service.
+# Install: ~/.config/systemd/user/lestobackupper.service on the server, then
+#   systemctl --user daemon-reload && systemctl --user enable --now lestobackupper
+#   sudo loginctl enable-linger $USER   # keeps it running after logout, starts it at boot
+# Everything lives in ~/lestobackupper (deploy/deploy.sh uploads there).
+
+[Unit]
+Description=LestoBackupper server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/lestobackupper
+ExecStart=%h/lestobackupper/lestobackupper-server %h/lestobackupper/data/lesto.db
+Environment=LESTO_WEB_DIR=%h/lestobackupper/web
+Environment=RUST_LOG=info
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -37,6 +37,49 @@ fingerprint (logged at startup) on first login.
 
 Only Rust is needed (and `ffmpeg` for video thumbnails).
 
+## Deploying to a server
+
+`deploy/deploy.sh <host>` builds here, uploads over ssh and restarts the
+server there. `<host>` is anything ssh takes, a `~/.ssh/config` name too:
+
+```sh
+deploy/deploy.sh myserver
+```
+
+It needs the server to have the same CPU architecture as this machine (it
+checks), and the one-time setup below. Everything goes in `~/lestobackupper`
+on the server: the program, `web/`, and `data/` (database, stored photos,
+TLS certificate: back this one up).
+
+### One-time setup on the server
+
+As the user that will run it (no root needed, except for `enable-linger`):
+
+```sh
+# from this repository, on your machine:
+ssh myserver 'mkdir -p ~/.config/systemd/user ~/lestobackupper/data'
+scp deploy/lestobackupper.service myserver:.config/systemd/user/
+
+# then on the server (ssh myserver):
+systemctl --user daemon-reload
+systemctl --user enable lestobackupper
+sudo loginctl enable-linger $USER   # keep it running after logout, start it at boot
+sudo apt install ffmpeg             # optional: video thumbnails (or your distro's package)
+```
+
+Then `deploy/deploy.sh myserver` from here. It prints the certificate's
+fingerprint: the app asks you to confirm it on first login. Port 9000 must
+be reachable from your phone (firewall).
+
+By hand, without the script: copy `target/release/lestobackupper-server`
+to `~/lestobackupper/` and `web/index.html`, `web/style.css`, `web/pkg/` to
+`~/lestobackupper/web/`, then `systemctl --user restart lestobackupper`.
+Logs: `journalctl --user -u lestobackupper -f`.
+
+If the server's CPU differs (e.g. an ARM board), build there instead: clone
+this repository on it, `cargo build --release --bin lestobackupper-server`,
+`cargo xtask web`, and copy the same files.
+
 ## Test
 
 ```sh
